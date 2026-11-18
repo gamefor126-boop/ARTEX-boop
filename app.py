@@ -3,6 +3,9 @@ import uuid
 import threading
 import time
 from datetime import datetime
+import artex_gate
+if artex_gate.current() is None:
+    artex_gate.install()  # needs ARTEX_SCOPE; refuses to run without a scope file
 from modules.subdomains import SubdomainEnumerator
 from modules.real_ip_discovery import RealIPDiscovery
 from modules.port_scanner import PortScanner
@@ -61,6 +64,9 @@ def start_scan():
         return jsonify({'error': 'Invalid domain format'}), 400
     
     domain = sanitize_domain(domain)
+    decision = artex_gate.current().scope.check_host(domain)
+    if decision.verdict != artex_gate.IN:
+        return jsonify({'error': f'{domain} is not in scope ({decision.reason})'}), 403
     scan_id = str(uuid.uuid4())
     
     # Initialize scan status
@@ -258,10 +264,11 @@ def run_scan(scan_id, domain, options):
                 scan_results[scan_id]['security_analysis'] = security_analysis
             
             # Run AI analysis
-            scan_status[scan_id]['current_task'] = 'Generating AI insights...'
-            ai_analyst = AIAnalyst(GROQ_API_KEY)
-            ai_analysis = ai_analyst.analyze_results(scan_results[scan_id])
-            scan_results[scan_id]['ai_analysis'] = ai_analysis
+            if options.get('ai', True):
+                scan_status[scan_id]['current_task'] = 'Generating AI insights...'
+                ai_analyst = AIAnalyst(GROQ_API_KEY)
+                ai_analysis = ai_analyst.analyze_results(scan_results[scan_id])
+                scan_results[scan_id]['ai_analysis'] = ai_analysis
             
             scan_status[scan_id]['progress'] = 100
             scan_status[scan_id]['status'] = 'completed'

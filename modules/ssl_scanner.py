@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.serialization import Encoding
 import dns.resolver
 import json
 import time
+from artex_gate import raw_identity_headers
 
 class SSLScanner:
     def __init__(self, timeout: int = 5, max_workers: int = 10):
@@ -586,6 +587,7 @@ class SSLScanner:
                 ssock.send(
                     f"HEAD / HTTP/1.1\r\n"
                     f"Host: {host}\r\n"
+                    f"{raw_identity_headers()}"
                     f"Connection: close\r\n\r\n".encode()
                 )
                 response = ssock.recv(4096).decode(errors='ignore')
@@ -599,6 +601,7 @@ class SSLScanner:
                     conn.send(
                         f"HEAD / HTTP/1.1\r\n"
                         f"Host: {host}\r\n"
+                        f"{raw_identity_headers()}"
                         f"Connection: close\r\n\r\n".encode()
                     )
                     response = conn.recv(4096).decode(errors='ignore')
@@ -792,6 +795,7 @@ class SSLScanner:
                 ssock.send(
                     f"HEAD / HTTP/1.1\r\n"
                     f"Host: {host}\r\n"
+                    f"{raw_identity_headers()}"
                     f"Connection: close\r\n\r\n".encode()
                 )
                 response = ssock.recv(4096).decode(errors='ignore')

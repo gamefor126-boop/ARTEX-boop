@@ -1,0 +1,46 @@
+# Copy to scopes/<program>.yaml and fill in from the program's policy page.
+# Matching rules:
+#   example.com          exact host only
+#   "*.example.com"      any subdomain (any depth), NOT the apex - list the apex separately
+#   203.0.113.0/24       IPs / CIDRs (also used for IPs ARTEX discovers, e.g. origin IPs)
+#   "https://x/y*"       URL glob (out_of_scope only) - checked on every HTTP request
+# out_of_scope always wins over in_scope.
+program: example-bbp
+
+in_scope:
+  - example.com
+  - "*.example.com"
+  # - 203.0.113.0/24
+
+out_of_scope:
+  - "*.corp.example.com"
+  - status.example.com
+  - "https://www.example.com/admin*"
+
+# Third parties ARTEX talks to for OSINT/AI. They are never treated as targets:
+# no identity headers, never nmap'd, own (slower) rate limit. Remove a line to forbid it.
+passive_sources:
+  - crt.sh
+  - dnsdumpster.com
+  - api.hackertarget.com
+  - www.cloudflare.com
+  # - api.groq.com          # AI analysis: sends scan results to Groq - enable deliberately
+
+identity:
+  user_agent: "Mozilla/5.0 (X11; Linux x86_64) ARTEX-recon/2.0 (bugbounty; h1:YOUR_HANDLE)"
+  headers:
+    X-Bug-Bounty: "YOUR_HANDLE"
+    # X-HackerOne-Research: "YOUR_HANDLE"
+
+rate_limit:
+  rps: 5              # requests/connections per second to in-scope assets (all threads combined)
+  burst: 5
+  passive_rps: 1      # third-party sources
+  nmap_max_rate: 5    # nmap --max-rate (packets/sec)
+
+# dns_resolvers: [1.1.1.1]          # added to /etc/resolv.conf resolvers for UDP/TCP 53
+# upstream_proxy: http://127.0.0.1:8080   # e.g. Burp; HTTP traffic is still scope-checked first
+
+audit:
+  log: logs/gate-audit.jsonl   # relative to repo root
+  log_allowed: true

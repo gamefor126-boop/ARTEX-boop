@@ -1,0 +1,6 @@
+logs/
+out/
+scopes/*.yaml
+!scopes/example.yaml
+.venv/
+__pycache__/

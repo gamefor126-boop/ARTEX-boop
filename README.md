@@ -118,3 +118,28 @@ Sample Report Output
 Security Notice
 
 This tool is for authorized security assessments only. Unauthorized use against systems you don't own or have permission to test is illegal.
+
+## Scope gate (artex_gate) + Hermes integration
+
+ARTEX refuses to start without a scope file. Everything it sends goes through `artex_gate`:
+
+| Path | What the gate does |
+|------|--------------------|
+| `requests` (every redirect hop) | scope check on URL, researcher `User-Agent` + custom headers, RPS limit |
+| raw sockets / TLS probes / port fallback / AXFR / UDP DNS | hostname + IP check (IPs must be in scope or resolved from an in-scope name) |
+| `nmap` | only in-scope hosts, adds `--max-rate` and `http.useragent` |
+| everything | JSONL audit log of every allow/block (`logs/gate-audit.jsonl`) |
+
+```bash
+cp scopes/example.yaml scopes/acme.yaml      # fill in from the program policy
+ln -sfn acme.yaml scopes/active.yaml
+.venv/bin/python -m artex_gate check --scope scopes/active.yaml https://api.acme.com
+.venv/bin/python -m artex_gate scan  --scope scopes/active.yaml acme.com --intensity light
+.venv/bin/python -m artex_gate fetch --scope scopes/active.yaml https://acme.com/robots.txt
+.venv/bin/python -m artex_gate serve --scope scopes/active.yaml   # web UI, 127.0.0.1 only
+```
+
+Hermes: `hermes/install.sh --approve` installs the `artex-recon` skill and a fail-closed
+`pre_tool_call` hook that blocks direct traffic to in/out-of-scope targets (curl, browser,
+web_extract, python), direct attack tools, and any agent edit of `scopes/`, `artex_gate/`
+or `hermes/`. Tests: `.venv/bin/python -m pytest tests/`.
