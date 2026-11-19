@@ -6,18 +6,24 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
-HOOK_CMD="$HERMES_HOME/agent-hooks/artex-scope-gate.py"
+HOOK_PATH="$HERMES_HOME/agent-hooks/artex-scope-gate.py"
+# Hermes runs hooks with its own python, which lacks PyYAML - use the ARTEX venv
+HOOK_CMD="$REPO/.venv/bin/python $HOOK_PATH"
 CONFIG="$HERMES_HOME/config.yaml"
 
 mkdir -p "$HERMES_HOME/skills/security/artex-recon" "$HERMES_HOME/agent-hooks"
 cp "$REPO/hermes/skills/artex-recon/SKILL.md" "$HERMES_HOME/skills/security/artex-recon/SKILL.md"
 chmod +x "$REPO/hermes/artex-scope-gate.py"
-ln -sfn "$REPO/hermes/artex-scope-gate.py" "$HOOK_CMD"
+ln -sfn "$REPO/hermes/artex-scope-gate.py" "$HOOK_PATH"
 echo "skill  -> $HERMES_HOME/skills/security/artex-recon/SKILL.md"
-echo "hook   -> $HOOK_CMD"
+echo "hook   -> $HOOK_PATH"
 
-if grep -q 'artex-scope-gate.py' "$CONFIG"; then
+if grep -qF "command: \"$HOOK_CMD\"" "$CONFIG"; then
   echo "config -> hook already configured in $CONFIG"
+elif grep -q 'artex-scope-gate.py' "$CONFIG"; then
+  cp "$CONFIG" "$CONFIG.bak-artex-$(date -u +%Y%m%dT%H%M%SZ)"
+  sed -i "s|command: \".*artex-scope-gate.py\"|command: \"$HOOK_CMD\"|" "$CONFIG"
+  echo "config -> updated hook command in $CONFIG"
 elif grep -qE '^hooks:' "$CONFIG"; then
   echo "config -> $CONFIG already has a hooks: block; add this entry under pre_tool_call manually:"
   printf '    - matcher: "%s"\n      command: "%s"\n      timeout: 15\n      fail_closed: true\n' \

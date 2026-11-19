@@ -48,6 +48,7 @@ def blocked(result):
     'wget -q -O- http://203.0.113.5/',                     # in-scope IP, still direct
     'curl http://8.8.4.4/',                                # public IP not in scope
     'nmap -sV api.acme.com',                               # attack tool
+    'which nmap && nmap -sV api.acme.com',
     'cd /tmp && nuclei -u https://example.org',            # attack tool, any target
     'python -m artex_gate scan acme.com --scope /tmp/evil.yaml',
     'ARTEX_SCOPE=/tmp/evil.yaml python app.py',
@@ -71,6 +72,8 @@ def test_terminal_blocked(repo, cmd):
     'curl https://notacme.com/',
     'pip install requests',
     'jq . out/acme.com-1234.json',
+    'which nmap nuclei',
+    'command -v ffuf || echo missing',
 ])
 def test_terminal_allowed(repo, cmd):
     assert not blocked(run(repo, 'terminal', {'command': cmd})), cmd
@@ -105,3 +108,27 @@ def test_no_active_scope(repo):
     (repo / 'scopes' / 'active.yaml').unlink()
     assert blocked(run(repo, 'terminal', {'command': 'nmap example.org'}))
     assert not blocked(run(repo, 'terminal', {'command': 'curl https://github.com'}))
+
+
+def test_symlinked_program_scope(repo, tmp_path_factory):
+    prog = tmp_path_factory.mktemp('bb') / 'scope.yaml'
+    prog.write_text((repo / 'scopes' / 'acme.yaml').read_text())
+    (repo / 'scopes' / 'ext.yaml').symlink_to(prog)
+    ok = '.venv/bin/python -m artex_gate scan acme.com --scope scopes/ext.yaml'
+    assert not blocked(run(repo, 'terminal', {'command': ok}))
+    assert blocked(run(repo, 'terminal', {'command': f'python -m artex_gate scan acme.com --scope {prog}'}))
+    assert blocked(run(repo, 'write_file', {'path': str(prog), 'content': 'x'}))
+    assert blocked(run(repo, 'terminal', {'command': f'sed -i s/a/b/ {prog}'}))
+
+
+def test_relative_paths_with_gateway_cwd(repo, tmp_path_factory):
+    # Regression: Hermes sends cwd=<gateway dir> (~/.hermes) while tools resolve relative
+    # paths against the session workspace; a relative scope path must still be caught.
+    gw = tmp_path_factory.mktemp('hermes_home')
+    assert blocked(run(repo, 'patch', {'path': 'scopes/active.yaml', 'old_string': 'a', 'new_string': 'b'}, cwd=gw))
+    assert blocked(run(repo, 'patch', {'mode': 'patch', 'patch': '*** Begin Patch\n*** Update File: scopes/acme.yaml\n@@\n-a\n+b\n*** End Patch'}, cwd=gw))
+    assert blocked(run(repo, 'terminal', {'command': 'echo x >> scopes/acme.yaml', 'workdir': str(repo)}, cwd=gw))
+    ok = '.venv/bin/python -m artex_gate check --scope scopes/active.yaml acme.com'
+    assert not blocked(run(repo, 'terminal', {'command': ok, 'workdir': str(repo)}, cwd=gw))
+    assert not blocked(run(repo, 'terminal', {'command': f'cd {repo} && {ok}'}, cwd=gw))
+    assert not blocked(run(repo, 'patch', {'path': 'notes.md', 'old_string': 'a', 'new_string': 'b'}, cwd=gw))

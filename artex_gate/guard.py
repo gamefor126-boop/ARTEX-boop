@@ -310,6 +310,9 @@ def install(scope_path: str = None) -> Guard:
     if not path:
         raise SystemExit('[artex-gate] no scope file: pass --scope or set ARTEX_SCOPE')
     scope = Scope.load(path)
+    identity = ' '.join([scope.user_agent, *scope.headers.values()])
+    if 'YOUR_' in identity:
+        raise SystemExit(f'[artex-gate] {path}: identity still has a YOUR_... placeholder - set your handle first')
     with _install_lock:
         _guard = Guard(scope)
         socket.getaddrinfo = _getaddrinfo

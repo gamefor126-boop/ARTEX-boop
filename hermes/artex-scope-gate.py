@@ -26,6 +26,8 @@ ACTIVE = SCOPES / 'active.yaml'
 HERMES = Path(os.environ.get('HERMES_HOME', '~/.hermes')).expanduser()
 PROTECTED = [p.resolve() for p in (SCOPES, ARTEX / 'artex_gate', ARTEX / 'app.py', ARTEX / 'hermes',
                                     HERMES / 'config.yaml', HERMES / 'shell-hooks-allowlist.json')]
+# scopes/ may hold symlinks to program folders (e.g. ~/k/bb/h1/<program>/scope.yaml); protect their targets too
+PROTECTED += [p.resolve() for p in SCOPES.glob('*') if p.is_symlink()] if SCOPES.is_dir() else []
 
 # Allow attack tools to run directly when EVERY target is in scope (they still bypass
 # the gate's UA header + rate limit, so this stays off unless you accept that).
@@ -38,6 +40,7 @@ ATTACK_TOOLS = {
     'amass', 'dnsrecon', 'dnsenum', 'fierce', 'gospider', 'hakrawler', 'kiterunner', 'kr', 'puredns',
     'shuffledns', 'massdns', 'interactsh-client', 'zgrab2', 'ghauri', 'jaeles', 'osmedeus',
 }
+LOOKUP_CMDS = {'which', 'whereis', 'type', 'command', 'man', 'apt', 'apt-get', 'brew', 'pip', 'pipx', 'go', 'dpkg'}
 FETCH_TOOLS = {'curl', 'wget', 'http', 'https', 'xh', 'nc', 'ncat', 'netcat', 'telnet', 'socat',
                'openssl', 'aria2c', 'lynx', 'w3m', 'links', 'grpcurl', 'websocat', 'ssh', 'ftp'}
 NET_CODE = re.compile(r'\b(requests|urllib|httpx|aiohttp|socket|http\.client|pycurl|subprocess|'
@@ -102,14 +105,27 @@ def is_local(host):
         return False
 
 
-def protected_path(p, cwd):
-    try:
-        path = (Path(cwd) / Path(p).expanduser()).resolve()
-    except (OSError, ValueError):
-        return None
-    for prot in PROTECTED:
-        if path == prot or prot in path.parents:
-            return prot
+def resolve_bases(payload, inp, text=''):
+    """Directories a relative path might be resolved against. The payload cwd is the Hermes
+    process dir (e.g. ~/.hermes), not the tool's workspace, so try every plausible base."""
+    roots = [inp.get('workdir'), inp.get('cwd'), payload.get('cwd'), str(ARTEX), str(Path.home())]
+    roots = [r for r in roots if isinstance(r, str) and r]
+    bases = list(roots)
+    for target in re.findall(r'\bcd\s+([^\s;&|]+)', text or ''):
+        target = os.path.expanduser(target.strip('\'"'))
+        bases += [target] if os.path.isabs(target) else [os.path.join(r, target) for r in roots]
+    return list(dict.fromkeys(bases))
+
+
+def protected_path(p, bases):
+    for base in bases:
+        try:
+            path = (Path(base) / Path(p).expanduser()).resolve()
+        except (OSError, ValueError):
+            continue
+        for prot in PROTECTED:
+            if path == prot or prot in path.parents:
+                return prot
     return None
 
 
@@ -148,12 +164,13 @@ def check_protected_code(code):
             block(f'agent may not modify {prot} - scope files and the gate are human-managed')
 
 
-def check_scope_flag(text, cwd):
-    """--scope / ARTEX_SCOPE must point at an existing file inside scopes/."""
+def check_scope_flag(text, bases):
+    """--scope / ARTEX_SCOPE must name an existing entry of scopes/ (symlinks to program folders are fine)."""
     for m in re.finditer(r'(?:--scope[=\s]+|ARTEX_SCOPE=)(\S+)', text):
         value = m.group(1).strip('\'"')
-        path = (Path(cwd) / Path(value).expanduser()).resolve()
-        if SCOPES not in path.parents or not path.exists():
+        found = {Path(os.path.normpath(Path(b) / Path(value).expanduser())) for b in bases}
+        found = [f for f in found if f.exists()]
+        if not found or any(f.parent.resolve() != SCOPES for f in found):
             block(f'scope file must be an existing file under {SCOPES} (got {value})')
 
 
@@ -209,6 +226,8 @@ def check_segment(seg, scope, apexes, cwd):
         words = seg.split()
     bins = {os.path.basename(w) for w in words if w and not w.startswith('-')}
     attack = bins & ATTACK_TOOLS
+    if words and os.path.basename(words[0]) in LOOKUP_CMDS:
+        attack = set()  # `which nmap`, `man ffuf`, `apt install nmap` do not run the tool
     network = bool(attack or bins & FETCH_TOOLS or NET_CODE.search(seg))
     targets = hosts_in(seg, include_bare=network)
     if attack:
@@ -244,12 +263,17 @@ def main():
     payload = json.load(sys.stdin)
     tool = payload.get('tool_name') or ''
     inp = payload.get('tool_input') or {}
-    cwd = payload.get('cwd') or os.getcwd()
+    text = inp.get('command') if isinstance(inp.get('command'), str) else ''
+    cwd = resolve_bases(payload, inp, text)
 
     if tool in ('write_file', 'patch'):
-        for key in ('path', 'file_path', 'target_path'):
-            if inp.get(key) and protected_path(inp[key], cwd):
-                block(f'agent may not modify {inp[key]} - scope files and the gate are human-managed')
+        paths = [inp[k] for k in ('path', 'file_path', 'target_path') if isinstance(inp.get(k), str)]
+        # patch mode='patch' carries a V4A diff naming its files inside the text
+        paths += re.findall(r'\*\*\* (?:Update|Add|Delete) File: *(\S+)', str(inp.get('patch') or ''))
+        paths += re.findall(r'\*\*\* Move to: *(\S+)', str(inp.get('patch') or ''))
+        for path in paths:
+            if protected_path(path, cwd):
+                block(f'agent may not modify {path} - scope files and the gate are human-managed')
         out()
 
     if tool == 'skill_manage':
